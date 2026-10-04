@@ -51,17 +51,37 @@ else
   PASS=$((PASS + 1)); echo "  PASS: AC-6.3: state file removed after Stop"
 fi
 
-# AC-4.3: output uses top-level systemMessage, not hookSpecificOutput
+# AC-4.3: reminder reaches Claude via hookSpecificOutput.additionalContext.
+# systemMessage is display-only — shown to the user, never added to the
+# model's context — so emitting it made this hook a no-op (PR #26).
 SESSION_ID_43="${SESSION_ID}-ac43"
 STATE_FILE_43="${TMPDIR:-/tmp}/sdd-state-${SESSION_ID_43}.json"
 INPUT_W43=$(make_state_input "$TMP" "$SESSION_ID_43" "Write")
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$STATE_SETTER" <<< "$INPUT_W43" > /dev/null
 INPUT43=$(make_stop_input "$TMP" "$SESSION_ID_43")
 OUTPUT43=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$STOP_SCRIPT" <<< "$INPUT43")
-HAS_SYS=$(echo "$OUTPUT43" | jq 'has("systemMessage")' 2>/dev/null || echo "false")
-assert_eq "$HAS_SYS" "true" "AC-4.3: output JSON has top-level systemMessage key"
 HAS_HOOK=$(echo "$OUTPUT43" | jq 'has("hookSpecificOutput")' 2>/dev/null || echo "false")
-assert_eq "$HAS_HOOK" "false" "AC-4.3: output JSON has no hookSpecificOutput key"
+assert_eq "$HAS_HOOK" "true" "AC-4.3: output JSON has hookSpecificOutput key"
+EVENT43=$(echo "$OUTPUT43" | jq -r '.hookSpecificOutput.hookEventName // empty')
+assert_eq "$EVENT43" "Stop" "AC-4.3: hookSpecificOutput.hookEventName is Stop"
+CTX43=$(echo "$OUTPUT43" | jq -r '.hookSpecificOutput.additionalContext // empty')
+if [ -n "$CTX43" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: AC-4.3: additionalContext carries the reminder text"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC-4.3: additionalContext empty — reminder not delivered to Claude"
+fi
+HAS_SYS=$(echo "$OUTPUT43" | jq 'has("systemMessage")' 2>/dev/null || echo "false")
+assert_eq "$HAS_SYS" "false" "AC-4.3: no display-only systemMessage key"
+
+# AC-6.4: silent when already continuing from a Stop hook (stop_hook_active)
+SESSION_ID_64="${SESSION_ID}-ac64"
+STATE_FILE_64="${TMPDIR:-/tmp}/sdd-state-${SESSION_ID_64}.json"
+INPUT_W64=$(make_state_input "$TMP" "$SESSION_ID_64" "Write")
+CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$STATE_SETTER" <<< "$INPUT_W64" > /dev/null
+INPUT64=$(jq -n --arg cwd "$TMP" --arg sid "$SESSION_ID_64" \
+  '{"hook_event_name":"Stop","session_id":$sid,"cwd":$cwd,"stop_hook_active":true}')
+OUTPUT64=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$STOP_SCRIPT" <<< "$INPUT64")
+assert_empty "$OUTPUT64" "AC-6.4: silent Stop when stop_hook_active is true"
 
 # FR-8: State setter fires on Edit too
 SESSION_ID2="${SESSION_ID}-edit"
@@ -80,7 +100,7 @@ INPUT_W41=$(make_state_input "$TMP" "$SESSION_ID_41" "Write")
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$STATE_SETTER" <<< "$INPUT_W41" > /dev/null
 INPUT41=$(make_stop_input "$TMP" "$SESSION_ID_41")
 OUTPUT41=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$STOP_SCRIPT" <<< "$INPUT41")
-MSG41=$(echo "$OUTPUT41" | jq -r '.systemMessage // empty')
+MSG41=$(echo "$OUTPUT41" | jq -r '.hookSpecificOutput.additionalContext // empty')
 assert_contains "$MSG41" "feedback" \
   "AC-4.1: stop message mentions feedback type"
 assert_contains "$MSG41" "project" \

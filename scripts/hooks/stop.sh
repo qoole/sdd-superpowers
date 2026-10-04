@@ -5,6 +5,7 @@ INPUT=$(cat)
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 CWD="${CWD:-$PWD}"
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib/detect-active-spec.sh"
@@ -21,6 +22,23 @@ fi
 
 [[ "$HAD_WRITES" = "true" ]] || exit 0
 
-jq -n '{
-  systemMessage: "Session end — invoke session-wrap to capture memory and lessons:\n  - feedback: approach corrections or validations received this session?\n  - project: status, goal, or deadline changes?\n  - user: new preferences or expertise observed?\n  - reference: external resources encountered?\n\nVerification: run verification-before-completion before claiming any work is done."
+# One reminder per turn, not one per attempt. Claude Code sets
+# stop_hook_active while it is already continuing because of a Stop hook;
+# without this guard, saving the memory we just asked for re-arms the flag
+# and the reminder bounces back on the next Stop.
+[[ "$STOP_HOOK_ACTIVE" = "true" ]] && exit 0
+
+MESSAGE="Session end — invoke session-wrap to capture memory and lessons:
+  - feedback: approach corrections or validations received this session?
+  - project: status, goal, or deadline changes?
+  - user: new preferences or expertise observed?
+  - reference: external resources encountered?
+
+Verification: run verification-before-completion before claiming any work is done."
+
+jq -n --arg msg "$MESSAGE" '{
+  hookSpecificOutput: {
+    hookEventName: "Stop",
+    additionalContext: $msg
+  }
 }'
